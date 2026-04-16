@@ -71,10 +71,9 @@ async fn main() -> anyhow::Result<()> {
 
     let shutdown_signal = shutdown.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("ctrl-c received, shutting down");
-            shutdown_signal.cancel();
-        }
+        let reason = wait_for_shutdown_signal().await;
+        tracing::info!(%reason, "shutdown signal received");
+        shutdown_signal.cancel();
     });
 
     let serve = axum::serve(listener, app).with_graceful_shutdown({
@@ -83,6 +82,30 @@ async fn main() -> anyhow::Result<()> {
     });
     serve.await?;
     Ok(())
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> &'static str {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGTERM handler; relying on SIGINT only");
+            tokio::signal::ctrl_c().await.ok();
+            return "SIGINT";
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => "SIGINT",
+        _ = sigterm.recv() => "SIGTERM",
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> &'static str {
+    tokio::signal::ctrl_c().await.ok();
+    "ctrl-c"
 }
 
 fn init_tracing() {
