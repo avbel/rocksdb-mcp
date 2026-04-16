@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: rocksdb-mcp
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+
+      - name: Install macOS build deps (llvm for bindgen)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Resolve version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Test
+        run: cargo test --release --locked --target ${{ matrix.target }}
+
+      - name: Stage binary (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir staging
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" staging/
+          cp README.md LICENSE staging/ 2>/dev/null || true
+
+      - name: Stage binary (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir staging
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" staging/
+          cp README.md LICENSE staging/ 2>/dev/null || true
+
+      - name: Package tar.gz
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd staging
+          tar czf "../${BIN_NAME}-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz" *
+
+      - name: Package zip (macOS)
+        if: matrix.archive == 'zip' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd staging
+          zip -r "../${BIN_NAME}-${{ steps.version.outputs.version }}-${{ matrix.target }}.zip" .
+
+      - name: Package zip (Windows)
+        if: matrix.archive == 'zip' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path staging\* -DestinationPath "${env:BIN_NAME}-${{ steps.version.outputs.version }}-${{ matrix.target }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.BIN_NAME }}-*.${{ matrix.archive }}
+
+  release:
+    name: github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  homebrew:
+    name: update homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      TAP_REPO: avbel/homebrew-tap
+      FORMULA_PATH: Formula/rocksdb-mcp.rb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute SHA256 sums
+        id: sha
+        shell: bash
+        run: |
+          V=${{ steps.version.outputs.version }}
+          MAC_SHA=$(sha256sum "dist/${{ env.BIN_NAME || 'rocksdb-mcp' }}-$V-aarch64-apple-darwin.zip" | awk '{print $1}')
+          LNX_SHA=$(sha256sum "dist/rocksdb-mcp-$V-x86_64-unknown-linux-gnu.tar.gz" | awk '{print $1}')
+          echo "mac=$MAC_SHA" >> "$GITHUB_OUTPUT"
+          echo "linux=$LNX_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Generate formula
+        shell: bash
+        run: |
+          V=${{ steps.version.outputs.version }}
+          cat > rocksdb-mcp.rb <<EOF
+          class RocksdbMcp < Formula
+            desc "Streamable-HTTP MCP server for RocksDB databases"
+            homepage "https://github.com/avbel/rocksdb-mcp"
+            version "$V"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/avbel/rocksdb-mcp/releases/download/v$V/rocksdb-mcp-$V-aarch64-apple-darwin.zip"
+                sha256 "${{ steps.sha.outputs.mac }}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/avbel/rocksdb-mcp/releases/download/v$V/rocksdb-mcp-$V-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${{ steps.sha.outputs.linux }}"
+              end
+            end
+
+            def install
+              bin.install "rocksdb-mcp"
+            end
+
+            test do
+              assert_match "rocksdb-mcp", shell_output("#{bin}/rocksdb-mcp --version")
+            end
+          end
+          EOF
+
+      - name: Push formula to tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          V=${{ steps.version.outputs.version }}
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p "tap/$(dirname ${FORMULA_PATH})"
+          cp rocksdb-mcp.rb "tap/${FORMULA_PATH}"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${FORMULA_PATH}"
+          git commit -m "rocksdb-mcp $V" || echo "no changes"
+          git push
