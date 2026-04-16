@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let database = Arc::new(Database::open(&cfg)?);
     let shutdown = CancellationToken::new();
 
-    if database.mode() == Mode::Secondary {
+    if cfg.mode == Mode::Secondary {
         refresh::spawn(
             database.handle(),
             cfg.refresh_interval,
@@ -60,8 +60,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let mut app: Router<()> = Router::new().nest_service("/mcp", service);
-    if let Some(token) = cfg.api_token.clone() {
-        let state = BearerToken(Arc::new(token));
+    if let Some(token) = cfg.api_token.as_deref() {
+        let state = BearerToken::new(token)?;
         app = app.layer(middleware::from_fn_with_state(state, require_bearer));
     }
 

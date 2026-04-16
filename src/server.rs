@@ -42,7 +42,7 @@ pub enum GetValueResult {
     Found {
         found: bool,
         value: String,
-        value_encoding: &'static str,
+        value_encoding: Encoding,
     },
     Missing {
         found: bool,
@@ -57,7 +57,7 @@ pub struct ListColumnFamiliesResult {
 #[derive(Clone)]
 pub struct RocksDbServer {
     db: Arc<Database>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "consumed by #[tool_handler] macro via ToolRouter")]
     tool_router: ToolRouter<Self>,
 }
 
@@ -100,7 +100,7 @@ If you don't know the exact column-family name, call `list_column_families` firs
 
         let value = self
             .db
-            .get(&args.column_family, &key_bytes)
+            .get(&args.column_family, key_bytes.as_ref())
             .map_err(map_get)?;
 
         let Some(bytes) = value else {
@@ -111,7 +111,7 @@ If you don't know the exact column-family name, call `list_column_families` firs
         json_result(&GetValueResult::Found {
             found: true,
             value: encoded,
-            value_encoding: args.value_encoding.as_str(),
+            value_encoding: args.value_encoding,
         })
     }
 }
@@ -147,7 +147,7 @@ fn map_enc(e: EncodingError) -> McpError {
 
 fn map_get(e: GetError) -> McpError {
     match e {
-        GetError::UnknownColumnFamily { .. } => McpError::invalid_params(e.to_string(), None),
+        GetError::UnknownColumnFamily(_) => McpError::invalid_params(e.to_string(), None),
         GetError::RocksDb(_) => McpError::internal_error(e.to_string(), None),
     }
 }

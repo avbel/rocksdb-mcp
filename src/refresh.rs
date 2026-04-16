@@ -23,8 +23,6 @@ pub fn spawn(db: Arc<DB>, interval: Duration, shutdown: CancellationToken) {
                 _ = ticker.tick() => {
                     if let Err(e) = db.try_catch_up_with_primary() {
                         tracing::warn!(error = %e, "try_catch_up_with_primary failed");
-                    } else {
-                        tracing::debug!("secondary caught up with primary");
                     }
                 }
             }

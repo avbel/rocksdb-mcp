@@ -7,12 +7,11 @@ use crate::config::{Config, Mode};
 pub struct Database {
     db: Arc<DB>,
     column_families: Vec<String>,
-    mode: Mode,
 }
 
 impl Database {
     pub fn open(cfg: &Config) -> anyhow::Result<Self> {
-        let cf_names = list_cf_or_default(&cfg.db_path)?;
+        let cf_names = DB::list_cf(&Options::default(), &cfg.db_path)?;
         let db = match cfg.mode {
             Mode::Snapshot => open_snapshot(&cfg.db_path, &cf_names)?,
             Mode::Secondary => {
@@ -26,7 +25,6 @@ impl Database {
         Ok(Self {
             db: Arc::new(db),
             column_families: cf_names,
-            mode: cfg.mode,
         })
     }
 
@@ -38,43 +36,28 @@ impl Database {
         &self.column_families
     }
 
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
-
     pub fn get(&self, cf_name: &str, key: &[u8]) -> Result<Option<Vec<u8>>, GetError> {
         let cf = self
             .db
             .cf_handle(cf_name)
-            .ok_or_else(|| GetError::UnknownColumnFamily {
-                requested: cf_name.to_string(),
-                available: self.column_families.clone(),
-            })?;
+            .ok_or_else(|| GetError::unknown_column_family(cf_name, &self.column_families))?;
         self.db.get_cf(&cf, key).map_err(GetError::RocksDb)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum GetError {
-    #[error(
-        "unknown column family '{requested}'; call list_column_families to see available CFs (currently: {available:?})"
-    )]
-    UnknownColumnFamily {
-        requested: String,
-        available: Vec<String>,
-    },
+    #[error("{0}")]
+    UnknownColumnFamily(String),
     #[error("rocksdb error: {0}")]
     RocksDb(#[from] rocksdb::Error),
 }
 
-fn list_cf_or_default(path: &Path) -> anyhow::Result<Vec<String>> {
-    match DB::list_cf(&Options::default(), path) {
-        Ok(names) => Ok(names),
-        Err(e) => {
-            // An empty/new DB may not have any CFs yet; fall back to "default".
-            tracing::warn!(error = %e, "DB::list_cf failed; assuming single 'default' CF");
-            Ok(vec!["default".to_string()])
-        }
+impl GetError {
+    fn unknown_column_family(requested: &str, available: &[String]) -> Self {
+        Self::UnknownColumnFamily(format!(
+            "unknown column family '{requested}'; call list_column_families to see available CFs (currently: {available:?})"
+        ))
     }
 }
 
@@ -115,15 +98,26 @@ mod tests {
 
     use super::*;
 
-    fn seed_primary(path: &PathBuf, cfs: &[&str], rows: &[(&str, &str, &str)]) {
+    fn seed_primary(path: &Path, cfs: &[&str], rows: &[(&str, &str, &str)]) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
-        let cf_names: Vec<String> = cfs.iter().map(|s| s.to_string()).collect();
-        let db = DB::open_cf(&opts, path, &cf_names).unwrap();
+        let db = DB::open_cf(&opts, path, cfs).unwrap();
         for (cf_name, k, v) in rows {
             let cf = db.cf_handle(cf_name).unwrap();
             db.put_cf(&cf, k.as_bytes(), v.as_bytes()).unwrap();
+        }
+    }
+
+    fn snapshot_config(db_path: PathBuf) -> Config {
+        Config {
+            db_path,
+            mode: Mode::Snapshot,
+            secondary_path: None,
+            refresh_interval: std::time::Duration::from_secs(5),
+            host: "127.0.0.1".into(),
+            port: 0,
+            api_token: None,
         }
     }
 
@@ -137,16 +131,7 @@ mod tests {
             &[("default", "a", "1"), ("meta", "version", "42")],
         );
 
-        let cfg = Config {
-            db_path: db_path.clone(),
-            mode: Mode::Snapshot,
-            secondary_path: None,
-            refresh_interval: std::time::Duration::from_secs(5),
-            host: "127.0.0.1".into(),
-            port: 0,
-            api_token: None,
-        };
-        let db = Database::open(&cfg).unwrap();
+        let db = Database::open(&snapshot_config(db_path)).unwrap();
 
         let mut cfs: Vec<String> = db.column_families().to_vec();
         cfs.sort();
@@ -160,6 +145,6 @@ mod tests {
         assert!(db.get("meta", b"missing").unwrap().is_none());
 
         let err = db.get("nope", b"a").unwrap_err();
-        assert!(matches!(err, GetError::UnknownColumnFamily { .. }));
+        assert!(matches!(err, GetError::UnknownColumnFamily(_)));
     }
 }

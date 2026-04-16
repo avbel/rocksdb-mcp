@@ -30,7 +30,7 @@ pub struct Config {
         long,
         env = "ROCKSDB_REFRESH_INTERVAL",
         default_value = "5s",
-        value_parser = parse_duration,
+        value_parser = humantime::parse_duration,
         value_name = "DURATION"
     )]
     pub refresh_interval: Duration,
@@ -58,8 +58,4 @@ impl Config {
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
-}
-
-fn parse_duration(s: &str) -> Result<Duration, String> {
-    humantime::parse_duration(s).map_err(|e| format!("invalid duration '{s}': {e}"))
 }

@@ -8,18 +8,23 @@ use axum::{
 };
 
 #[derive(Clone)]
-pub struct BearerToken(pub Arc<String>);
+pub struct BearerToken(Arc<HeaderValue>);
+
+impl BearerToken {
+    pub fn new(token: &str) -> anyhow::Result<Self> {
+        let header = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| anyhow::anyhow!("API token contains non-ASCII characters"))?;
+        Ok(Self(Arc::new(header)))
+    }
+}
 
 pub async fn require_bearer(
     State(token): State<BearerToken>,
     req: Request,
     next: Next,
 ) -> Response {
-    let expected = format!("Bearer {}", token.0);
-    let expected = HeaderValue::from_str(&expected).expect("ASCII bearer token");
-
     match req.headers().get(header::AUTHORIZATION) {
-        Some(got) if got == expected => next.run(req).await,
+        Some(got) if got == token.0.as_ref() => next.run(req).await,
         Some(_) => (StatusCode::UNAUTHORIZED, "invalid bearer token").into_response(),
         None => (
             StatusCode::UNAUTHORIZED,
