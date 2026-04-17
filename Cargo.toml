@@ -1,0 +1,43 @@
+[package]
+name = "rocksdb-mcp"
+version = "0.1.0"
+edition = "2024"
+description = "Streamable-HTTP MCP server that exposes a read-only view of a RocksDB database"
+license = "MIT"
+repository = "https://github.com/avbel/rocksdb-mcp"
+homepage = "https://github.com/avbel/rocksdb-mcp"
+readme = "README.md"
+rust-version = "1.85"
+
+[[bin]]
+name = "rocksdb-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "1.4", features = ["server", "macros", "transport-streamable-http-server"] }
+rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "snappy", "lz4"] }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+hex = "0.4"
+humantime-serde = "1"
+humantime = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
