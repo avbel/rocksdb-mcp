@@ -127,6 +127,7 @@ jobs:
     env:
       TAP_REPO: avbel/homebrew-tap
       FORMULA_PATH: Formula/rocksdb-mcp.rb
+      GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -184,9 +185,12 @@ jobs:
           end
           EOF
 
+      - name: Skip tap update when no token is configured
+        if: env.GH_TOKEN == ''
+        run: echo "::notice::Skipping Homebrew tap update because HOMEBREW_TAP_TOKEN is not configured."
+
       - name: Push formula to tap
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: env.GH_TOKEN != ''
         run: |
           V=${{ steps.version.outputs.version }}
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
