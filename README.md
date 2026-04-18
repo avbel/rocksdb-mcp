@@ -191,10 +191,11 @@ Release is fully automated by `.github/workflows/release.yml`:
 1. Bump `version` in `Cargo.toml`, commit, and tag `vX.Y.Z`.
 2. Push the tag. CI builds Linux x86_64, macOS arm64, and Windows x86_64,
    publishes a GitHub Release with the archives, and pushes an updated
-   formula to `avbel/homebrew-tap`.
+   formula to `avbel/homebrew-tap` when tap credentials are configured.
 
 The Homebrew job needs a repo secret named `HOMEBREW_TAP_TOKEN` (a PAT with
-`contents:write` on the tap repository).
+`contents:write` on the tap repository). Without that secret, the release still
+publishes the GitHub Release artifacts and skips the tap update.
 
 ## License
 
